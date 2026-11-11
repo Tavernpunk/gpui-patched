@@ -38,9 +38,9 @@ use crate::linux::{
 use gpui::{
     Action, ActivityGuard, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle,
     ForegroundExecutor, GraphicalEnvironment, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions,
-    Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, PowerMode, Result, RunnableVariant, Task, ThermalState, WindowAppearance,
-    WindowButtonLayout, WindowParams, WindowingModes, WindowingRequest,
+    Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformQuitGuard,
+    PlatformTextSystem, PlatformWindow, PowerMode, Result, RunnableVariant, Task, ThermalState,
+    WindowAppearance, WindowButtonLayout, WindowParams, WindowingModes, WindowingRequest,
 };
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use gpui::{Pixels, Point, px};
@@ -290,6 +290,7 @@ async fn listen_for_system_power_events(
 /// registered on it once, and the current [`DisplayConnection`] adds and removes its own sources
 /// as the app switches between the display modes it allows.
 pub(crate) struct LinuxPlatform {
+    should_quit: PlatformQuitGuard,
     common: Rc<RefCell<LinuxCommon>>,
     /// The event loop, until `run` takes it.
     event_loop: RefCell<Option<EventLoop<'static, ()>>>,
@@ -336,6 +337,7 @@ impl LinuxPlatform {
         LinuxCommon::register_sources(&common, &loop_handle, main_receiver, power_receiver)
             .expect("failed to register Linux event sources");
         Self {
+            should_quit: PlatformQuitGuard::default(),
             common,
             event_loop: RefCell::new(Some(event_loop)),
             loop_handle,
@@ -681,7 +683,14 @@ impl Platform for LinuxPlatform {
     }
 
     fn quit(&self) {
-        self.with_common(|common| common.signal.stop());
+        // Never invoke the guard inside with_common's RefCell borrow.
+        if self.should_quit.allows_quit() {
+            self.with_common(|common| common.signal.stop());
+        }
+    }
+
+    fn on_should_quit(&self, callback: Box<dyn FnMut() -> bool>) -> bool {
+        self.should_quit.register(callback)
     }
 
     fn set_initial_windowing(&self, request: WindowingRequest) {
@@ -702,6 +711,10 @@ impl Platform for LinuxPlatform {
 
     fn restart(&self, binary_path: Option<PathBuf>, arguments: Vec<std::ffi::OsString>) {
         use std::os::unix::process::CommandExt as _;
+
+        if !self.should_quit.allows_quit() {
+            return;
+        }
 
         // get the process id of the current process
         let app_pid = std::process::id().to_string();

@@ -13,9 +13,9 @@ use gpui::{
     Action, ActivationPolicy, ActivityGuard, AnyWindowHandle, BackgroundExecutor, ClipboardItem,
     CursorStyle, ForegroundExecutor, GraphicalEnvironment, KeyContext, Keymap, Menu, MenuItem,
     OsMenu, OwnedMenu, PathPromptOptions, Platform, PlatformDisplay, PlatformKeyboardLayout,
-    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PowerMode, Result, SystemMenuType,
-    Task, ThermalState, WindowAppearance, WindowKind, WindowParams, WindowingRequest,
-    popup::PopupNotSupportedError,
+    PlatformKeyboardMapper, PlatformQuitGuard, PlatformTextSystem, PlatformWindow, PowerMode,
+    Result, SystemMenuType, Task, ThermalState, WindowAppearance, WindowKind, WindowParams,
+    WindowingRequest, popup::PopupNotSupportedError,
 };
 use gpui_apple::{
     keychain,
@@ -37,8 +37,8 @@ use objc2_app_kit::{
     NSScrollerStyle, NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceWillSleepNotification,
 };
 use objc2_foundation::{
-    NSActivityOptions, NSArray, NSBundle, NSError, NSInteger, NSProcessInfo, NSString, NSURL,
-    NSUTF8StringEncoding,
+    NSActivityOptions, NSArray, NSBundle, NSError, NSInteger, NSProcessInfo, NSString, NSUInteger,
+    NSURL, NSUTF8StringEncoding,
 };
 use parking_lot::Mutex;
 use semver::Version;
@@ -86,6 +86,10 @@ unsafe fn build_classes() {
             decl.add_method(
                 sel!(applicationShouldHandleReopen:hasVisibleWindows:),
                 should_handle_reopen as extern "C-unwind" fn(_, Sel, *mut AnyObject, Bool) -> Bool,
+            );
+            decl.add_method(
+                sel!(applicationShouldTerminate:),
+                should_terminate as extern "C-unwind" fn(_, Sel, *mut AnyObject) -> NSUInteger,
             );
             decl.add_method(
                 sel!(applicationWillTerminate:),
@@ -181,6 +185,7 @@ pub(crate) struct MacPlatformState {
     on_system_sleep: Option<Box<dyn FnMut()>>,
     on_system_wake: Option<Box<dyn FnMut()>>,
     system_power_observers_registered: bool,
+    should_quit: Rc<PlatformQuitGuard>,
     quit: Option<Box<dyn FnMut() -> bool>>,
     menu_command: Option<Box<dyn FnMut(&dyn Action)>>,
     validate_menu_command: Option<Box<dyn FnMut(&dyn Action) -> bool>>,
@@ -244,6 +249,7 @@ impl MacPlatform {
             general_pasteboard: Pasteboard::general(),
             find_pasteboard: Pasteboard::find(),
             reopen: None,
+            should_quit: Rc::new(PlatformQuitGuard::default()),
             quit: None,
             menu_command: None,
             validate_menu_command: None,
@@ -576,6 +582,10 @@ impl Platform for MacPlatform {
     }
 
     fn quit(&self) {
+        let guard = self.0.lock().should_quit.clone();
+        if !guard.allows_quit() {
+            return;
+        }
         // Quitting the app causes us to close windows, which invokes `Window::on_close` callbacks
         // synchronously before this method terminates. If we call `Platform::quit` while holding a
         // borrow of the app state (which most of the time we will do), we will end up
@@ -597,6 +607,11 @@ impl Platform for MacPlatform {
 
     fn restart(&self, binary_path: Option<PathBuf>, arguments: Vec<std::ffi::OsString>) {
         use std::os::unix::process::CommandExt as _;
+
+        let guard = self.0.lock().should_quit.clone();
+        if !guard.allows_quit() {
+            return;
+        }
 
         let app_pid = std::process::id().to_string();
         let app_path = binary_path
@@ -1037,6 +1052,11 @@ impl Platform for MacPlatform {
             .detach();
     }
 
+    fn on_should_quit(&self, callback: Box<dyn FnMut() -> bool>) -> bool {
+        let guard = self.0.lock().should_quit.clone();
+        guard.register(callback)
+    }
+
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
         self.0.lock().quit = Some(callback);
     }
@@ -1386,6 +1406,18 @@ extern "C-unwind" fn should_handle_reopen(
         }
     }
     Bool::YES
+}
+
+extern "C-unwind" fn should_terminate(this: &AnyObject, _: Sel, _: *mut AnyObject) -> NSUInteger {
+    let platform = unsafe { get_mac_platform(this) };
+    let guard = platform.0.lock().should_quit.clone();
+    // NSApplicationTerminateReply is NSUInteger, not BOOL. Cancel returns to the
+    // ordinary event loop; no NSTerminateLater reply or nested recovery loop is needed.
+    if guard.allows_quit() {
+        1 // NSTerminateNow
+    } else {
+        0 // NSTerminateCancel
+    }
 }
 
 extern "C-unwind" fn will_terminate(this: &AnyObject, _: Sel, _: *mut AnyObject) {
