@@ -1,6 +1,13 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(gpui_embedded_hlsl)");
+    #[cfg(not(target_os = "windows"))]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // FXC runs only on a Windows build host. Cross-host Windows targets
+        // carry the same HLSL for optimized compilation on the destination.
+        println!("cargo:rustc-cfg=gpui_embedded_hlsl");
+    }
     #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
     println!("cargo:rerun-if-changed=build.rs");
     #[cfg(target_os = "windows")]

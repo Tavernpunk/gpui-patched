@@ -1697,13 +1697,17 @@ const BUFFER_COUNT: usize = 3;
 pub(crate) mod shader_resources {
     use anyhow::Result;
 
-    #[cfg(debug_assertions)]
+    #[cfg(gpui_embedded_hlsl)]
+    use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
+    #[cfg(all(debug_assertions, not(gpui_embedded_hlsl)))]
+    use windows::{Win32::Graphics::Direct3D::Fxc::D3DCompileFromFile, core::HSTRING};
+    #[cfg(any(debug_assertions, gpui_embedded_hlsl))]
     use windows::{
         Win32::Graphics::Direct3D::{
-            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompileFromFile},
+            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION},
             ID3DBlob,
         },
-        core::{HSTRING, PCSTR},
+        core::PCSTR,
     };
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1727,17 +1731,17 @@ pub(crate) mod shader_resources {
     pub(crate) struct RawShaderBytes<'t> {
         inner: &'t [u8],
 
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, gpui_embedded_hlsl))]
         _blob: ID3DBlob,
     }
 
     impl<'t> RawShaderBytes<'t> {
         pub(crate) fn new(module: ShaderModule, target: ShaderTarget) -> Result<Self> {
-            #[cfg(not(debug_assertions))]
+            #[cfg(not(any(debug_assertions, gpui_embedded_hlsl)))]
             {
                 Ok(Self::from_bytes(module, target))
             }
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, gpui_embedded_hlsl))]
             {
                 let blob = build_shader_blob(module, target)?;
                 let inner = unsafe {
@@ -1754,7 +1758,7 @@ pub(crate) mod shader_resources {
             self.inner
         }
 
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, gpui_embedded_hlsl)))]
         fn from_bytes(module: ShaderModule, target: ShaderTarget) -> Self {
             let bytes = match module {
                 ShaderModule::Quad => match target {
@@ -1794,12 +1798,19 @@ pub(crate) mod shader_resources {
         }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, gpui_embedded_hlsl))]
     pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
         unsafe {
+            #[cfg(not(gpui_embedded_hlsl))]
             use windows::Win32::Graphics::{
                 Direct3D::ID3DInclude, Hlsl::D3D_COMPILE_STANDARD_FILE_INCLUDE,
             };
+
+            #[cfg(gpui_embedded_hlsl)]
+            let shader_source = include_str!("shaders.hlsl").replace(
+                r#"#include "alpha_correction.hlsl""#,
+                include_str!("alpha_correction.hlsl"),
+            );
 
             let entry = format!(
                 "{}_{}\0",
@@ -1816,6 +1827,7 @@ pub(crate) mod shader_resources {
 
             let mut compile_blob = None;
             let mut error_blob = None;
+            #[cfg(not(gpui_embedded_hlsl))]
             let shader_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("src/shaders.hlsl")
                 .canonicalize()?;
@@ -1824,10 +1836,12 @@ pub(crate) mod shader_resources {
             let target_cstr = PCSTR::from_raw(target.as_ptr());
 
             // really dirty trick because winapi bindings are unhappy otherwise
+            #[cfg(not(gpui_embedded_hlsl))]
             let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
                 D3D_COMPILE_STANDARD_FILE_INCLUDE as usize,
             );
 
+            #[cfg(not(gpui_embedded_hlsl))]
             let ret = D3DCompileFromFile(
                 &HSTRING::from(shader_path.to_str().unwrap()),
                 None,
@@ -1835,6 +1849,25 @@ pub(crate) mod shader_resources {
                 entry_point,
                 target_cstr,
                 D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION,
+                0,
+                &mut compile_blob,
+                Some(&mut error_blob),
+            );
+            #[cfg(gpui_embedded_hlsl)]
+            let ret = D3DCompile(
+                shader_source.as_ptr().cast(),
+                shader_source.len(),
+                PCSTR::null(),
+                None,
+                None,
+                entry_point,
+                target_cstr,
+                if cfg!(debug_assertions) {
+                    D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION
+                } else {
+                    // Match the native Windows release FXC /O3 path.
+                    D3DCOMPILE_OPTIMIZATION_LEVEL3
+                },
                 0,
                 &mut compile_blob,
                 Some(&mut error_blob),
@@ -1854,10 +1887,10 @@ pub(crate) mod shader_resources {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, gpui_embedded_hlsl)))]
     include!(concat!(env!("OUT_DIR"), "/shaders_bytes.rs"));
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, gpui_embedded_hlsl))]
     impl ShaderModule {
         pub fn as_str(self) -> &'static str {
             match self {
