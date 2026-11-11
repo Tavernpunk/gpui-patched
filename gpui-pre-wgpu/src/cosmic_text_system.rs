@@ -814,9 +814,15 @@ impl CosmicTextSystemState {
                 continue;
             }
 
+            // Cosmic keeps shaping offsets separate from the layout pen. Match
+            // LayoutGlyph::physical so combining marks retain their anchors and
+            // stacks instead of piling up at the base glyph's baseline.
             let shaped_glyph = ShapedGlyph {
                 id: GlyphId(glyph.glyph_id as u32),
-                position: point(glyph.x.into(), glyph.y.into()),
+                position: point(
+                    (glyph.x + glyph.font_size * glyph.x_offset).into(),
+                    (glyph.y - glyph.font_size * glyph.y_offset).into(),
+                ),
                 index: glyph.start,
                 is_emoji,
             };
