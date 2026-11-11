@@ -634,7 +634,6 @@ impl RenderOnce for Button {
         let instance_style = base.style().clone();
         let normal_style = style.normal(self.outline, cx);
         let selected_style = style.selected(self.outline, cx);
-        let disabled_style = style.disabled(self.outline, cx);
         let icon_size = self.icon_size.unwrap_or_else(|| match self.size {
             Size::Size(v) => Size::Size(v * 0.75),
             _ => self.size,
@@ -827,12 +826,15 @@ impl RenderOnce for Button {
                         .text_color(selected_style.fg)
                         .refine_style(&instance_style)
                 })
+                // A disabled button keeps its own look and fades the whole
+                // control to half.
                 .disabled(|style| {
                     style
-                        .bg(disabled_style.bg)
-                        .text_color(disabled_style.fg)
-                        .border_color(disabled_style.border)
+                        .bg(normal_style.bg)
+                        .text_color(normal_style.fg)
+                        .border_color(normal_style.border)
                         .shadow_none()
+                        .opacity(0.5)
                         .refine_style(&instance_style)
                 })
         })
