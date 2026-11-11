@@ -252,6 +252,9 @@ impl BaseDialogRoot {
     fn layer(self, index: usize, topmost: bool) -> Self {
         map_base_root!(self, layer(index, topmost))
     }
+    fn accessibility_label(self, label: SharedString) -> Self {
+        map_base_root!(self, accessibility_label(label))
+    }
     fn focus_handle(self, focus: FocusHandle) -> Self {
         map_base_root!(self, focus_handle(focus))
     }
@@ -395,6 +398,13 @@ impl Dialog {
         F: Fn(DialogContent, &mut Window, &mut App) -> DialogContent + 'static,
     {
         self.content_builder = Some(Rc::new(builder));
+        self
+    }
+
+    /// Names the dialog for accessibility clients (its title, typically).
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        let label = label.into();
+        self.base = self.base.take().map(|base| base.accessibility_label(label));
         self
     }
 

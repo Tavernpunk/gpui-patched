@@ -252,6 +252,11 @@ impl AlertDialog {
         self.0 = self.0.on_close(handler);
         self
     }
+    /// Names the dialog for accessibility clients (its title, typically).
+    pub fn accessibility_label(mut self, label: impl Into<gpui::SharedString>) -> Self {
+        self.0 = self.0.accessibility_label(label);
+        self
+    }
     #[doc(hidden)]
     pub fn layer(mut self, index: usize, topmost: bool) -> Self {
         self.0 = self.0.layer(index, topmost);

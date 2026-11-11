@@ -3,8 +3,8 @@ use std::rc::Rc;
 use gpui::{
     Anchor, AnyElement, App, Context, DismissEvent, ElementId, EventEmitter, FocusHandle,
     Focusable, InteractiveElement as _, IntoElement, KeyBinding, MouseButton, ParentElement as _,
-    Render, RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement, Styled,
-    Subscription, Window, div, prelude::FluentBuilder as _,
+    Render, RenderOnce, Role, SharedString, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Subscription, Window, div, prelude::FluentBuilder as _,
 };
 
 use crate::{
@@ -199,6 +199,7 @@ pub struct Popover {
     mouse_button: MouseButton,
     overlay_closable: bool,
     on_open_change: Option<OpenChangeHandler>,
+    accessibility_label: Option<SharedString>,
 }
 
 impl Popover {
@@ -217,6 +218,7 @@ impl Popover {
             mouse_button: MouseButton::Left,
             overlay_closable: true,
             on_open_change: None,
+            accessibility_label: None,
         }
     }
 
@@ -278,6 +280,12 @@ impl Popover {
 
     pub fn track_focus(mut self, handle: &FocusHandle) -> Self {
         self.tracked_focus_handle = Some(handle.clone());
+        self
+    }
+
+    /// Names the popover's dialog surface for accessibility clients.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -370,6 +378,9 @@ impl RenderOnce for Popover {
             // dismissed with Escape, which is what this role tells assistive
             // technology to expect.
             .role(Role::Dialog)
+            .when_some(self.accessibility_label.clone(), |this, label| {
+                this.aria_label(label)
+            })
             .occlude()
             .tab_group()
             .track_focus(&focus_handle)
