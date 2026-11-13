@@ -1,5 +1,10 @@
 # gpui-patched
 
+> **Branch `windows-shaders-only`.** Uncommon Rares is moving off this fork. On this branch only
+> change 2 below (embedded HLSL, `gpui-pre-windows`) is still applied; changes 1 and 3 are reverted
+> and changes 4 and 5 are no longer used. The game patches `gpui-pre-windows` alone from here and
+> takes every other crate from crates.io. Change 3 landed upstream in Zed PR #66799.
+
 The few `gpui-pre` and `gpui-kit` crates Uncommon Rares builds with local
 changes. Each directory is the unmodified crates.io archive of that crate plus
 the commits listed below. Everything else resolves from crates.io.
