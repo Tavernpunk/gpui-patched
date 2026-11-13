@@ -107,15 +107,6 @@ impl WindowsWindowInner {
             WM_NCHITTEST => self.handle_hit_test_msg(handle, lparam),
             WM_PAINT => self.handle_paint_msg(handle),
             WM_CLOSE => self.handle_close_msg(),
-            // Every visible top-level window must use the same guard as the broadcast
-            // helper. Forward synchronously without borrowing window state: queries
-            // can arrive during an AppCell update or another native callback.
-            WM_QUERYENDSESSION => Some(unsafe {
-                SendMessageW(self.platform_window_handle, msg, Some(wparam), Some(lparam)).0
-            }),
-            // Committed session cleanup belongs to the helper exactly as before.
-            // FALSE explicitly leaves all windows and unresolved close state intact.
-            WM_ENDSESSION => Some(0),
             WM_DESTROY => self.handle_destroy_msg(handle),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
             WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),

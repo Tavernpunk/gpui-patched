@@ -78,7 +78,6 @@ pub struct WindowsPlatform {
 }
 
 struct WindowsPlatformInner {
-    should_quit: PlatformQuitGuard,
     state: WindowsPlatformState,
     raw_window_handles: std::sync::Weak<RwLock<SmallVec<[TrackedWindow; 4]>>>,
     // The below members will never change throughout the entire lifecycle of the app.
@@ -598,22 +597,9 @@ impl Platform for WindowsPlatform {
     }
 
     fn quit(&self) {
-        // Reject nested requests before enqueueing another termination attempt.
-        if !self.inner.should_quit.allows_quit() {
-            return;
-        }
-        let inner = self.inner.clone();
         self.foreground_executor()
-            .spawn(async move {
-                if inner.should_quit.allows_quit() {
-                    unsafe { PostQuitMessage(0) };
-                }
-            })
+            .spawn(async { unsafe { PostQuitMessage(0) } })
             .detach();
-    }
-
-    fn on_should_quit(&self, callback: Box<dyn FnMut() -> bool>) -> bool {
-        self.inner.should_quit.register(callback)
     }
 
     fn set_initial_windowing(&self, request: WindowingRequest) {
@@ -645,9 +631,6 @@ impl Platform for WindowsPlatform {
     }
 
     fn restart(&self, binary_path: Option<PathBuf>, arguments: Vec<OsString>) {
-        if !self.inner.should_quit.allows_quit() {
-            return;
-        }
         let pid = std::process::id();
         let Some(app_path) = binary_path.or(self.app_path().log_err()) else {
             return;
@@ -684,13 +667,8 @@ impl Platform for WindowsPlatform {
             log::error!("failed to restart: PowerShell is unavailable");
             return;
         };
-        let inner = self.inner.clone();
         self.foreground_executor
             .spawn(async move {
-                // Do not spawn the restart helper for an already denied attempt.
-                if !inner.should_quit.allows_quit() {
-                    return;
-                }
                 let mut command = new_std_command(powershell);
                 let arguments = encode_restart_arguments(&arguments);
                 command
@@ -706,12 +684,7 @@ impl Platform for WindowsPlatform {
                 let restart_process = command.spawn();
 
                 match restart_process {
-                    Ok(_) => {
-                        // CreateProcessW can pump messages, so permission may have changed.
-                        if inner.should_quit.allows_quit() {
-                            unsafe { PostQuitMessage(0) };
-                        }
-                    }
+                    Ok(_) => unsafe { PostQuitMessage(0) },
                     Err(e) => log::error!("failed to spawn restart script: {:?}", e),
                 }
             })
@@ -1183,7 +1156,6 @@ impl WindowsPlatformInner {
     fn new(context: &mut PlatformWindowCreateContext) -> Result<Rc<Self>> {
         let state = WindowsPlatformState::new(context.directx_devices.take());
         Ok(Rc::new(Self {
-            should_quit: PlatformQuitGuard::default(),
             state,
             raw_window_handles: context.raw_window_handles.clone(),
             dispatcher: context
@@ -1246,10 +1218,8 @@ impl WindowsPlatformInner {
             | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(msg, wparam, lparam),
             WM_POWERBROADCAST => self.handle_power_broadcast(wparam, lparam),
             WM_DISPLAYCHANGE => self.handle_display_change(handle),
-            WM_QUERYENDSESSION => Some(if self.should_quit.allows_quit() { 1 } else { 0 }),
+            WM_QUERYENDSESSION => Some(1),
             WM_ENDSESSION if wparam.0 != 0 => self.handle_end_session(),
-            // Another app or the user may cancel shutdown. Keep the app and its guard intact.
-            WM_ENDSESSION => Some(0),
             _ => None,
         };
         if let Some(result) = handled {

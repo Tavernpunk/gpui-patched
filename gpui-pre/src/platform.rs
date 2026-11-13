@@ -63,7 +63,6 @@ use seahash::SeaHasher;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
@@ -363,59 +362,6 @@ bitflags::bitflags! {
 
 pub use platform_info::{OperatingSystem, PlatformInfo, PlatformTarget};
 
-/// Main-thread storage for a platform's synchronous termination guard.
-///
-/// Keep this outside backend locks/borrows, or clone its owner before invoking it.
-/// This is separate from the final cleanup callback registered with [`Platform::on_quit`].
-#[derive(Default)]
-pub struct PlatformQuitGuard {
-    state: Cell<PlatformQuitGuardState>,
-}
-
-#[derive(Default)]
-enum PlatformQuitGuardState {
-    #[default]
-    Unregistered,
-    Ready(Box<dyn FnMut() -> bool>),
-    Checking,
-}
-
-impl PlatformQuitGuard {
-    /// Installs one guard for the platform's lifetime. Returns false if already registered.
-    /// A failed registration retains the existing guard, including while it is executing.
-    pub fn register(&self, callback: Box<dyn FnMut() -> bool>) -> bool {
-        match self.state.replace(PlatformQuitGuardState::Checking) {
-            PlatformQuitGuardState::Unregistered => {
-                self.state.set(PlatformQuitGuardState::Ready(callback));
-                true
-            }
-            state => {
-                self.state.set(state);
-                false
-            }
-        }
-    }
-
-    /// Checks one termination attempt without holding a borrow across the callback.
-    /// An unregistered guard permits termination. Nested attempts during a callback
-    /// are denied; taking the callback must never make a registered guard look absent.
-    /// If a callback unwinds, the guard remains closed to further termination attempts.
-    pub fn allows_quit(&self) -> bool {
-        match self.state.replace(PlatformQuitGuardState::Checking) {
-            PlatformQuitGuardState::Unregistered => {
-                self.state.set(PlatformQuitGuardState::Unregistered);
-                true
-            }
-            PlatformQuitGuardState::Ready(mut callback) => {
-                let allowed = callback();
-                self.state.set(PlatformQuitGuardState::Ready(callback));
-                allowed
-            }
-            PlatformQuitGuardState::Checking => false,
-        }
-    }
-}
-
 #[expect(missing_docs)]
 pub trait Platform: 'static {
     /// Returns the host OS and application target reported by this backend.
@@ -427,25 +373,6 @@ pub trait Platform: 'static {
 
     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>);
     fn quit(&self);
-    /// Installs a synchronous guard before cancellable native termination commits.
-    /// Returns true only when installed; false means unsupported or already registered.
-    /// The default implementation is explicitly unsupported and does not retain the callback.
-    ///
-    /// The callback runs on the main thread and returns true to permit this attempt,
-    /// false to cancel it. It may run while AppCell is borrowed: do not borrow the app,
-    /// await, block, or request termination from it. Record an intent, return false,
-    /// and request quit again from the normal app loop when closing has completed.
-    /// A permitted attempt may be checked again at native commit. Nested attempts
-    /// while the callback runs are denied. Registration is once per
-    /// platform lifetime and does not replace [`Self::on_quit`] cleanup.
-    ///
-    /// Desktop backends cover their ordinary programmatic quit paths; macOS also
-    /// covers AppKit terminate requests and Windows covers normal session queries.
-    /// Forced termination, crashes, and Linux session-manager negotiation are outside
-    /// this contract. Denying a restart's termination does not promise restart replay.
-    fn on_should_quit(&self, _callback: Box<dyn FnMut() -> bool>) -> bool {
-        false
-    }
     /// Switches a capable platform between headless and windowed modes. See
     /// [`App::request_windowing`].
     /// Sets the windowing mode the platform starts in. Called before `run`. See
