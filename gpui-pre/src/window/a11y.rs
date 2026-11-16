@@ -217,6 +217,11 @@ impl A11y {
         !self.force_disabled
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn activate_for_test(&mut self) {
+        self.active_flag.store(true, Ordering::SeqCst);
+    }
+
     pub(crate) fn is_active(&self) -> bool {
         self.active_this_frame
     }
